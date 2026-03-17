@@ -1,0 +1,16 @@
+# Build artifacts
+*.o
+*.d
+.build/
+DerivedData/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# App binary (rebuild from source)
+ScreenTune.app/Contents/MacOS/ScreenTune
+
+# Temporary files
+/tmp/
