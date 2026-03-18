@@ -140,16 +140,17 @@ func setResolution(_ displayID: CGDirectDisplayID, modeID: Int32) {
     }
 }
 
+// MARK: - Display identification
+
+// Stable hardware key: vendor_model_serial (survives reboots, unlike CGDirectDisplayID)
+func displayHardwareKey(_ id: CGDirectDisplayID) -> String {
+    "\(CGDisplayVendorNumber(id))_\(CGDisplayModelNumber(id))_\(CGDisplaySerialNumber(id))"
+}
+
 // MARK: - Display name via IOKit
 
-var nameCache: [CGDirectDisplayID: String] = {
-    if let s = UserDefaults.standard.dictionary(forKey: "dn") as? [String: String] {
-        var m: [CGDirectDisplayID: String] = [:]
-        for (k, v) in s { if let i = UInt32(k) { m[CGDirectDisplayID(i)] = v } }
-        return m
-    }
-    return [:]
-}()
+// Keyed by hardware key for persistence across reboots
+var nameCache: [String: String] = (UserDefaults.standard.dictionary(forKey: "dn") as? [String: String]) ?? [:]
 
 func iterateIOKit(_ className: String, _ body: ([String: Any]) -> Void) {
     var iter: io_iterator_t = 0
@@ -167,7 +168,6 @@ func iterateIOKit(_ className: String, _ body: ([String: Any]) -> Void) {
 }
 
 func refreshNames() {
-    // Build IOKit lookup tables once, then match against unnamed displays
     var clcdNames: [(vendor: UInt32, product: UInt32, name: String)] = []
     iterateIOKit("AppleCLCD2") { dict in
         guard let attrs = dict["DisplayAttributes"] as? [String: Any],
@@ -187,55 +187,41 @@ func refreshNames() {
 
     var changed = false
     for id in getIDs(SLSGetActiveDisplayList) {
-        if CGDisplayIsBuiltin(id) != 0 || nameCache[id] != nil { continue }
+        if CGDisplayIsBuiltin(id) != 0 { continue }
+        let key = displayHardwareKey(id)
+        if nameCache[key] != nil { continue }
         let vendor = CGDisplayVendorNumber(id)
         let model = CGDisplayModelNumber(id)
         let serial = CGDisplaySerialNumber(id)
 
         if let match = clcdNames.first(where: { $0.vendor == vendor && $0.product == model }) {
-            nameCache[id] = match.name
+            nameCache[key] = match.name
             changed = true
         } else if let match = avNames.first(where: { $0.serial == serial }) {
-            nameCache[id] = match.name
+            nameCache[key] = match.name
             changed = true
         }
     }
 
     if changed {
-        var dict: [String: String] = [:]
-        for (k, v) in nameCache { dict["\(k)"] = v }
-        UserDefaults.standard.set(dict, forKey: "dn")
+        UserDefaults.standard.set(nameCache, forKey: "dn")
     }
 }
 
 // MARK: - Display list
 
-var savedDisplayIDs: Set<Int> = Set((UserDefaults.standard.array(forKey: "savedIDs") as? [Int]) ?? [])
-
 func getExternalDisplays() -> [DisplayInfo] {
     let active = Set(getIDs(SLSGetActiveDisplayList))
     let all = getIDs(SLSGetDisplayList)
     var result: [DisplayInfo] = []
-    var seen = Set<CGDirectDisplayID>()
+    var seenKeys = Set<String>()
     for id in all {
-        guard !seen.contains(id) else { continue }
-        seen.insert(id)
         if CGDisplayIsBuiltin(id) != 0 || CGDisplayVendorNumber(id) == 0 { continue }
-        result.append(DisplayInfo(id: id, name: nameCache[id] ?? "Display \(id)", isActive: active.contains(id)))
+        let key = displayHardwareKey(id)
+        guard !seenKeys.contains(key) else { continue }
+        seenKeys.insert(key)
+        result.append(DisplayInfo(id: id, name: nameCache[key] ?? "Display \(id)", isActive: active.contains(id)))
     }
-
-    let currentIDs = Set(result.map { Int($0.id) })
-    for raw in savedDisplayIDs where !currentIDs.contains(raw) {
-        let id = CGDirectDisplayID(raw)
-        result.append(DisplayInfo(id: id, name: nameCache[id] ?? "Display \(id)", isActive: false))
-    }
-
-    let newSaved = Set(result.map { Int($0.id) })
-    if newSaved != savedDisplayIDs {
-        savedDisplayIDs = newSaved
-        UserDefaults.standard.set(Array(savedDisplayIDs), forKey: "savedIDs")
-    }
-
     return result.sorted { $0.name < $1.name }
 }
 

@@ -8,8 +8,8 @@ A lightweight macOS menu bar app for controlling external displays. Built in Swi
 - Enable/disable external displays with a single click
 - Uses undocumented `SLSConfigureDisplayEnabled` private API
 - Works on Apple Silicon (M1/M2/M3/M4) + macOS Ventura and later
-- Remembers disconnected displays for easy reconnection
 - Display names resolved via IOKit (AppleCLCD2 / DCPAVServiceProxy)
+- Displays identified by stable hardware key (vendor/model/serial) — survives reboots
 
 ### Brightness Control
 - Software brightness via gamma table manipulation (`CGSetDisplayTransferByTable`)
@@ -25,17 +25,17 @@ A lightweight macOS menu bar app for controlling external displays. Built in Swi
 - Resolution persists for the session (auto-reverts on logout for safety)
 
 ### Settings
-- **HiDPI only** — filter resolution list to show only HiDPI/Retina modes
+- **HiDPI only** — filter resolution list to show only HiDPI modes
 - **Native aspect only** — filter out resolutions that would stretch/distort the image (enabled by default)
-- Native aspect ratio detected automatically via `kDisplayModeNativeFlag` (0x02000000)
+- Native aspect ratio detected automatically via `kDisplayModeNativeFlag`
 - Settings persist across app restarts via `@AppStorage`
 
 ### General
-- Pure SwiftUI `MenuBarExtra` with `.menuBarExtraStyle(.window)` — native popover, no NSMenu hacks
-- Single-file Swift app (~470 lines)
+- Pure SwiftUI `MenuBarExtra` with `.menuBarExtraStyle(.window)`
+- Single-file Swift app (~460 lines)
 - No Xcode project needed — compiles with `swiftc` from the command line
 - Starts at login (configurable via System Settings → Login Items)
-- LSUIElement — no Dock icon, menu bar only
+- Menu bar only (no Dock icon)
 
 ## Requirements
 
@@ -45,7 +45,6 @@ A lightweight macOS menu bar app for controlling external displays. Built in Swi
 ## Build
 
 ```bash
-cd ~/dev/swift/ScreenTune
 swiftc -parse-as-library \
   -framework SwiftUI \
   -framework CoreGraphics \
