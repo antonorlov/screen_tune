@@ -46,6 +46,70 @@ func setDisplayEnabled(_ id: CGDirectDisplayID, _ on: Bool) -> Bool {
     return CGCompleteDisplayConfiguration(c, .permanently) == .success
 }
 
+// MARK: - Display identification
+
+func displayHardwareKey(_ id: CGDirectDisplayID) -> String {
+    "\(CGDisplayVendorNumber(id))_\(CGDisplayModelNumber(id))_\(CGDisplaySerialNumber(id))"
+}
+
+// MARK: - Display state persistence
+
+var disabledDisplayKeys: Set<String> = Set((UserDefaults.standard.array(forKey: "disabledKeys") as? [String]) ?? [])
+
+func saveDisabledState(_ key: String, disabled: Bool) {
+    if disabled {
+        disabledDisplayKeys.insert(key)
+    } else {
+        disabledDisplayKeys.remove(key)
+    }
+    UserDefaults.standard.set(Array(disabledDisplayKeys), forKey: "disabledKeys")
+}
+
+func shouldBeDisabled(_ id: CGDirectDisplayID) -> Bool {
+    disabledDisplayKeys.contains(displayHardwareKey(id))
+}
+
+func enforceDisabledState(for displayID: CGDirectDisplayID) {
+    guard shouldBeDisabled(displayID) else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        if CGDisplayIsActive(displayID) != 0 {
+            _ = setDisplayEnabled(displayID, false)
+        }
+    }
+}
+
+func enforceAllDisabledStates() {
+    for id in getIDs(SLSGetActiveDisplayList) {
+        if CGDisplayIsBuiltin(id) != 0 { continue }
+        enforceDisabledState(for: id)
+    }
+}
+
+// MARK: - Display reconfiguration callback
+
+func registerDisplayCallback(_ vm: DisplayVM) {
+    let vmPtr = Unmanaged.passUnretained(vm).toOpaque()
+    CGDisplayRegisterReconfigurationCallback({ displayID, flags, userInfo in
+        let isComplete = !flags.contains(.beginConfigurationFlag)
+        guard isComplete else { return }
+
+        let hasAdd = flags.contains(.addFlag)
+        let hasRemove = flags.contains(.removeFlag)
+        guard hasAdd || hasRemove else { return }
+
+        if hasAdd {
+            refreshNames()
+            enforceDisabledState(for: displayID)
+        }
+
+        // Update UI
+        if let ptr = userInfo {
+            let vm = Unmanaged<DisplayVM>.fromOpaque(ptr).takeUnretainedValue()
+            DispatchQueue.main.async { vm.refresh() }
+        }
+    }, vmPtr)
+}
+
 // MARK: - Brightness (gamma table-based software brightness)
 
 func getBrightness(_ id: CGDirectDisplayID) -> Float {
@@ -88,7 +152,6 @@ struct ResolutionMode: Identifiable, Hashable {
     static func == (lhs: ResolutionMode, rhs: ResolutionMode) -> Bool { lhs.id == rhs.id }
 }
 
-// Cached on first load per display to survive macOS mode-list filtering bug
 var modeCache: [CGDirectDisplayID: [CGDisplayMode]] = [:]
 
 func getAllModes(_ displayID: CGDirectDisplayID) -> [CGDisplayMode] {
@@ -140,16 +203,8 @@ func setResolution(_ displayID: CGDirectDisplayID, modeID: Int32) {
     }
 }
 
-// MARK: - Display identification
-
-// Stable hardware key: vendor_model_serial (survives reboots, unlike CGDirectDisplayID)
-func displayHardwareKey(_ id: CGDirectDisplayID) -> String {
-    "\(CGDisplayVendorNumber(id))_\(CGDisplayModelNumber(id))_\(CGDisplaySerialNumber(id))"
-}
-
 // MARK: - Display name via IOKit
 
-// Keyed by hardware key for persistence across reboots
 var nameCache: [String: String] = (UserDefaults.standard.dictionary(forKey: "dn") as? [String: String]) ?? [:]
 
 func iterateIOKit(_ className: String, _ body: ([String: Any]) -> Void) {
@@ -229,15 +284,12 @@ func getExternalDisplays() -> [DisplayInfo] {
 
 class DisplayVM: ObservableObject {
     @Published var displays: [DisplayInfo] = []
-    var timer: Timer?
 
     init() {
         refreshNames()
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            refreshNames()
-            self?.refresh()
-        }
+        registerDisplayCallback(self)
+        enforceAllDisabledStates()
     }
 
     func refresh() {
@@ -245,10 +297,12 @@ class DisplayVM: ObservableObject {
     }
 
     func toggle(_ d: DisplayInfo) {
+        let newState = !d.isActive
         if let idx = displays.firstIndex(where: { $0.id == d.id }) {
-            displays[idx] = DisplayInfo(id: d.id, name: d.name, isActive: !d.isActive)
+            displays[idx] = DisplayInfo(id: d.id, name: d.name, isActive: newState)
         }
-        DispatchQueue.global(qos: .userInitiated).async { _ = setDisplayEnabled(d.id, !d.isActive) }
+        saveDisabledState(displayHardwareKey(d.id), disabled: !newState)
+        DispatchQueue.global(qos: .userInitiated).async { _ = setDisplayEnabled(d.id, newState) }
     }
 }
 
